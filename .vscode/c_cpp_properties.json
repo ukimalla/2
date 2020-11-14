@@ -1,0 +1,28 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "defines": [
+                "__KERNEL__",
+                "MODULE"
+            ],
+            "includePath": [
+               "${workspaceFolder}/**",
+               "${workspaceFolder}/lab-1/include",
+               "/home/ukimalla/Documents/school/522/linux_source/linux/arch/arm/include",
+               "/home/ukimalla/Documents/school/522/linux_source/linux/arch/arm/include/generated",
+               "/home/ukimalla/Documents/school/522/linux_source/linux/include",
+               "/home/ukimalla/Documents/school/522/linux_source/linux/arch/arm/include/uapi",
+               "/home/ukimalla/Documents/school/522/linux_source/linux/arch/arm/include/generated/uapi",
+               "/home/ukimalla/Documents/school/522/linux_source/linux/include/uapi",
+               "/home/ukimalla/Documents/school/522/linux_source/linux/include/generated/uapi"
+            ],
+            "compilerArgs": [],
+            "compilerPath": "/usr/bin/gcc",
+            "cStandard": "c11",
+            "cppStandard": "gnu++14",
+            "intelliSenseMode": "gcc-arm"
+        }
+    ],
+    "version": 4
+}
