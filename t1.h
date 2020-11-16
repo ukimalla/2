@@ -33,7 +33,6 @@ struct ete_task ete_tasks[] = {
         .subtasks_num = 3,   
         .period_ms = 20,  
         .execution_time = 6,   
-
    },
 
     // Task 3

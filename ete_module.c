@@ -19,25 +19,75 @@
 
 #include <linux/sort.h>
 
+#include "manifest.h"
+
 // Task Includes 
 #include "tasks.h"
 #include "t1.h"
 
+
+// TODO : Add compariosion return value
+
 #define NUM_CORES 4
+
 #define MAX_UTILIZATION 100
+#define MAX_PRIORITY 99 
+#define MIN_PRIORITY 0  
 
-static int tick;
+#define NUM_CALIBRATION_TSTAMPS 2
+#define BEFORE_EXEC_INDEX 0
+#define AFTER_EXEC_INDEX 1
+#define INIT_NUM_ITERATIONS 3000 
+#define CALIBRATION_THREAD_START_DELAY_NS 100000000
+#define MAX_CALIBRATION_ITERATIONS 50
+#define MS_TO_US_CONVERSION_FACTOR 1000 
+#define ERROR_TOLERANCE 10 // 0.01 miliseconds or 10 microseconds
+#define SEARCH_FACTOR 2 // Binary search
 
-static char * exec_mode = "calibrate";
+
+#define CALIBRATE "calibrate"
+
+static char * exec_mode = CALIBRATE; 
+
+static struct hrtimer thread_wakeup_timer; 
 
 module_param(exec_mode, charp, 0644); 
+
+// Array of sub_task pointers bound to each core
+static struct sub_task ** core_sub_tasks[NUM_CORES]; 
+
+// Holds the number of sub-tasks assigned to each core.
+static int core_num_subtasks[NUM_CORES] = {0, 0, 0, 0};
+
+// Array to hold task_struct * for each core for calibration mode
+static struct task_struct * core_threads[NUM_CORES] = {NULL, NULL, NULL, NULL}; 
+
+
+// An array of pointers to all subtasks to be sorted by utilization.
+struct sub_task * sorted_sub_tasks[TOTAL_SUBTASKS]; 
+
+
+static void deallocate_memory(void){
+    int i;
+    // Deallocating dynamically allocated memory
+    for(i = 0; i < NUM_CORES; ++i){
+       if(core_sub_tasks[i]){
+           kfree(core_sub_tasks[i]); 
+       }
+       core_sub_tasks[i] = 0; // Removing free-ed pointer
+    }
+}
+
+
+
+
+/*
 
 static ktime_t timer_interval;
 struct hrtimer timer;
 
-static struct task_struct * kthread = NULL;
-static struct task_struct * kthread1 = NULL;
-static struct task_struct * kthread2 = NULL;
+
+static int tick;
 
 static enum hrtimer_restart 
  timer_function( struct hrtimer * timer ){
@@ -58,60 +108,25 @@ static enum hrtimer_restart
     return HRTIMER_RESTART;
 }
 
-static int
-thread_fn(void * data)
-{
-    printk("Hello from thread %s.\n", current->comm);
 
-    while (!kthread_should_stop()) {
-        unsigned i = 0; // Inner loop counter
-        ulong num_loops = 5000000;
 
-        set_current_state(TASK_INTERRUPTIBLE);
-        schedule();
+*/
 
-        printk("Thread was woken up!\n");
 
-        /*num_loops = (period_sec * num_loops) + 
-                    (ulong) (period_nsec/800);*/
-        
-        for(i=0; i < num_loops; ++i){
-            ktime_get();
-        }
-    }
-
-    return 0;
+// Prints all the member variables of the task
+void print_task(struct ete_task * task){
+         printk(KERN_INFO "Task: %d \n subtasks_num: %d \nperiod_ms: %lu\n       \
+                execution_time: %lu \n",
+                task->task_num,
+                task->subtasks_num,
+                task->period_ms,
+                task->execution_time);
 }
 
-/* Function to print all tasks and subtasks */
-static void 
-print_all_tasks_and_subtasks(void){
-    int i, j;
-    /* Looping through each task*/
-    for(i = 0; i < NUM_TASKS; ++i){
-        
-        /* Pointer to array for each ete subtask */
-        struct sub_task * ete_sub_tasks;  
+// Prints all the member variables of the subtask 
+void print_sub_tasks(struct sub_task * st){
 
-        const int num_sub_tasks = ete_tasks[i].subtasks_num;
-
-        
-    
-        /* Printing task i */
-        printk(KERN_INFO "Task: %d \n subtasks_num: %d \nperiod_ms: %lu\n       \
-                execution_time: %lu \n",
-                ete_tasks[i].task_num,
-                ete_tasks[i].subtasks_num,
-                ete_tasks[i].period_ms,
-                ete_tasks[i].execution_time);
-
-        ete_sub_tasks = sub_tasks[i];
-
-
-        /* Looping through sub-tasks */
-        for(j = 0; j < num_sub_tasks; ++j){
-
-            /* Printing subtask j of task i */
+            // Printing subtask j of task i 
             printk(KERN_INFO "Task: %d Subtask: %d \n \
                             loop_iteration_count %d \n \
                             cumulative_execution_time %lu \n \
@@ -119,20 +134,261 @@ print_all_tasks_and_subtasks(void){
                             relative_deadline %lu \n \
                             utilization %lu \n \
                             core %d \n ",
-                            ete_sub_tasks[j].parent_num,
-                            ete_sub_tasks[j].num,
-                            ete_sub_tasks[j].loop_iteration_count,
-                            ete_sub_tasks[j].cumulative_execution_time,
-                            ete_sub_tasks[j].execution_time,
-                            ete_sub_tasks[j].relative_deadline,
-                            ete_sub_tasks[j].utilization,
-                            ete_sub_tasks[j].core);
+                            st->parent_num,
+                            st->num,
+                            st->loop_iteration_count,
+                            st->cumulative_execution_time,
+                            st->execution_time,
+                            st->relative_deadline,
+                            st->utilization,
+                            st->core);
+}
+
+/* Function to print all tasks and subtasks */
+void print_all_tasks_and_subtasks(void){
+    int i, j;
+    // Looping through each task
+    for(i = 0; i < NUM_TASKS; ++i){
+        
+        // Pointer to array for each ete subtask 
+        struct sub_task * ete_sub_tasks;  
+
+        const int num_sub_tasks = ete_tasks[i].subtasks_num;
+
+        
+    
+        // Printing task i 
+        print_task(&ete_tasks[i]);
+        ete_sub_tasks = sub_tasks[i];
+
+
+        // Looping through sub-tasks 
+        for(j = 0; j < num_sub_tasks; ++j){               
+            print_sub_tasks(&ete_sub_tasks[j]);
+        }
+
+    }
+} 
+
+
+
+
+/* subtask_function
+   Calls ktime_get as specified by loop_iteration_count in st to simulate 
+   real workload.
+ */ 
+void subtask_function( struct sub_task * st ){
+    // Iterator
+    int i;
+    for(i = 0; i < st->loop_iteration_count; ++i){
+        ktime_get();
+    }
+}
+
+
+/*  calibrate_thread_function 
+*   Function to calibrate the loop number of iterations. This allows for a 
+*   closer approximation of a real workload that takes the execution time ;
+*   specified in the subtask struct.
+*/
+static int calibrate_thread_function(void * data){
+    int i, size;
+    struct sub_task ** core_subtask_array = (struct sub_task **) data;
+
+
+
+    #if DEBUG
+        printk(KERN_INFO "Setting Calibration Thread Task Interruptable\n");
+    #endif
+
+    set_current_state(TASK_INTERRUPTIBLE);
+    schedule();
+
+    #if DEBUG
+        printk(KERN_INFO "Waking up from calibration thread\n");
+    #endif
+ 
+
+    
+
+    if(core_subtask_array){ // Ensuring that the pointer is not NULL
+
+
+        const int current_core = core_subtask_array[0]->core; 
+
+        #if DEBUG
+            printk(KERN_INFO "Getting the size of the array\n");
+        #endif
+        // Getting the number of subtasks 
+        size = core_num_subtasks[current_core];
+
+
+        #if DEBUG
+           printk(KERN_INFO "There are %d subtasks in core %d",
+                             size,
+                             current_core);
+        #endif
+ 
+
+
+        for(i = 0; i < size; ++i){
+            struct sched_param sp;
+
+            // Binary search tracker variables
+            int j;
+            int last_min_iterations = 0;
+            int last_max_iterations = INIT_NUM_ITERATIONS;
+            
+            int64_t execution_time_in_us; 
+            bool best_estimate_found;
+
+
+            sp.sched_priority = core_subtask_array[i]->priority;
+            sched_setscheduler(current, SCHED_FIFO, &sp);
+
+            // TODO : fix edge case where exec_time = 0
+            if(core_subtask_array[i]->loop_iteration_count == 0){
+               core_subtask_array[i]->loop_iteration_count = 
+                            INIT_NUM_ITERATIONS;
+            }else{
+                last_max_iterations =
+                                 core_subtask_array[i]->loop_iteration_count;
+            }
+
+            execution_time_in_us =
+                                (core_subtask_array[i]->execution_time * 
+                                MS_TO_US_CONVERSION_FACTOR);
+
+                                                
+
+            // Iterations to search for the best approximation 
+            for(best_estimate_found = false, j = 0;
+                j < MAX_CALIBRATION_ITERATIONS && !(best_estimate_found);
+                ++j)
+            {
+                int64_t time_taken_us, error;
+                int current_num_itr;
+
+                ktime_t calibration_timestamps[NUM_CALIBRATION_TSTAMPS];
+
+                printk("Going through iteration %d on core %d", 
+                       j, current_core);
+
+                current_num_itr = core_subtask_array[i]->loop_iteration_count;
+
+                // Simulating a real task and getting timestamps
+                calibration_timestamps[BEFORE_EXEC_INDEX] = ktime_get();
+                subtask_function(core_subtask_array[i]); 
+                calibration_timestamps[AFTER_EXEC_INDEX] = ktime_get();
+
+                // Calculating error 
+                time_taken_us = 
+                       ktime_us_delta(calibration_timestamps[AFTER_EXEC_INDEX],
+                               calibration_timestamps[BEFORE_EXEC_INDEX]);
+
+
+                
+                error =  time_taken_us-
+                        execution_time_in_us;
+
+
+                // Checking if and what change is necessary
+
+                if(abs(error) < ERROR_TOLERANCE){ // Best estimate found
+                    best_estimate_found = true;
+                    printk(KERN_INFO "Best esitimate found: \n");
+                    print_sub_tasks(core_subtask_array[i]);
+                    #if DEBUG
+                        printk(KERN_INFO "time_take_us %lld \n  \
+                                        execution_time_in_us %lld \n  \
+                                        error %lld \n \
+                                        current_num_itr %d \n \
+                                        next_itr %d \n",
+                                        time_taken_us,
+                                        execution_time_in_us,
+                                        error,
+                                        current_num_itr,
+                                        core_subtask_array[i]->loop_iteration_count);
+                    #endif
+                }
+                
+                
+                else if(error < 0) // Took shorter than necessary 
+                {
+                    // Ceeling has not been reached
+                    if(last_max_iterations == current_num_itr){
+                        last_min_iterations = last_max_iterations;
+                        last_max_iterations *= SEARCH_FACTOR;
+                        core_subtask_array[i]->loop_iteration_count = 
+                                    last_max_iterations;
+                    }else{
+                        last_min_iterations = current_num_itr;
+                        core_subtask_array[i]->loop_iteration_count = 
+                            (last_max_iterations + last_min_iterations) /
+                            SEARCH_FACTOR;
+                    }
+                }
+               
+               
+               else{ // Took longer than necessary 
+                    last_max_iterations = current_num_itr;
+                    core_subtask_array[i]->loop_iteration_count = 
+                        (last_max_iterations + last_min_iterations) /
+                        SEARCH_FACTOR; 
+                }
+                #if DEBUG
+                if(j == MAX_CALIBRATION_ITERATIONS - 1){
+                    printk(KERN_INFO "time_take_us %lld \n  \
+                            execution_time_in_us %lld \n  \
+                            error %lld \n \
+                            current_num_itr %d \n \
+                            next_itr %d \n",
+                            time_taken_us,
+                            execution_time_in_us,
+                            error,
+                            current_num_itr,
+                            core_subtask_array[i]->loop_iteration_count);
+                }
+                #endif
+
+
+
+            }
+
+            // Checking if converged
+            if(!best_estimate_found){
+                printk(KERN_ALERT "Could not converge for: \n");
+                print_sub_tasks(core_subtask_array[i]);
+            }else{
+                printk(KERN_ALERT "Best Iteration was Found!");
+            }
+
         }
 
     }
 
+    return 0;
+
 }
 
+
+
+
+// Function to wake up all calibration core threads
+static enum hrtimer_restart
+wake_up_all_core_threads( struct hrtimer * timer ){
+    int core_num;
+
+    for(core_num = 0; core_num < NUM_CORES; ++core_num){
+        if(core_threads[core_num]){
+            printk(KERN_INFO"Should call wakeup process\n");
+            wake_up_process(core_threads[core_num]);
+        }
+    }
+
+
+    return HRTIMER_NORESTART;
+}
 
 
 /* Function to compare two tasks based on utilization */
@@ -140,52 +396,66 @@ static int compare_by_utilization(const void *lhs, const void *rhs){
     struct sub_task * ltask = *(struct sub_task **) lhs;
     struct sub_task * rtask = *(struct sub_task **) rhs;
 
+    #if DEBUG
+        printk(KERN_INFO "lhs %p rhs %p", lhs, rhs);
+    #endif 
+
+
     if(ltask->utilization > rtask->utilization) return -1;
     if(ltask->utilization < rtask->utilization) return 1;
 
     return 0;
 }
 
-static int assign_cores_and_priority(void){
+/* Function to compare two tasks based on relative deadline*/
+static int compare_by_relative_deadline(const void *lhs, const void *rhs){
+    struct sub_task * ltask = *(struct sub_task **) lhs;
+    struct sub_task * rtask = *(struct sub_task **) rhs;
+
+    #if DEBUG
+        printk(KERN_INFO "lhs %p rhs %p", lhs, rhs);
+    #endif 
+
+    if(ltask->relative_deadline > rtask->relative_deadline) return -1;
+    if(ltask->relative_deadline < rtask->relative_deadline) return 1;
+
+    return 0;
+}
+
+
+ 
+static int assign_cores(void){
   
-    /* Iterators */
+    // Iterators 
     int i, j;
 
     int return_value = 0;
-    const int MAX_PRIORITY = __NR_sched_get_priority_max;
-    const int MIN_PRIORITY = __NR_sched_get_priority_min;
-
-    #if DEBUG
-        printk(KERN_INFO "Max Priority set to %d", MAX_PRIORITY);
-    #endif
-
     int core_utilization[NUM_CORES] = {0, 0, 0, 0};
-    int core_subtask_priority[NUM_CORES] = {MAX_PRIORITY, MAX_PRIORITY,
-                                            MAX_PRIORITY, MAX_PRIORITY};
 
 
-    /* ### Sorting sub-tasks according to util ### */
+    // ### Sorting sub-tasks according to util ### 
 
-    /* An array of pointers to all subtasks to be sorted by utilization.*/
-    struct sub_task * sorted_sub_tasks[TOTAL_SUBTASKS]; 
-
-    /* Looping through each task*/
+    // Looping through each task
     for(i = 0; i < NUM_TASKS; ++i){
         // Number of subtasks in the current ete task
         int num_sub_tasks; 
 
-        /* Pointer to array for each ete subtask */
+        // Pointer to array for each ete subtask 
         struct sub_task * current_sub_tasks_array;
 
         num_sub_tasks = ete_tasks[i].subtasks_num;
         current_sub_tasks_array = sub_tasks[i];
 
-        /* Inserting each subtask to the array to be sorted*/
+        // Inserting each subtask to the array to be sorted
         for(j = 0; j < num_sub_tasks; ++j){
             sorted_sub_tasks[(i * num_sub_tasks) + j] =
                      &current_sub_tasks_array[j]; 
         } 
     }
+
+    #if DEBUG
+       printk(KERN_INFO "Sort input address %p\n",sorted_sub_tasks);
+    #endif
 
     // Sorting the array of tasks by utilization
     sort(sorted_sub_tasks, 
@@ -194,26 +464,8 @@ static int assign_cores_and_priority(void){
         &compare_by_utilization,
         NULL);
 
-    for(j = 0;j < TOTAL_SUBTASKS; ++j){
-            /* Printing subtask j of task i */
-            printk(KERN_INFO "Task: %d Subtask: %d \n \
-                            loop_iteration_count %d \n \
-                            cumulative_execution_time %lu \n \
-                            execution_time %lu \n \
-                            relative_deadline %lu \n \
-                            utilization %lu \n \
-                            core %d \n ",
-                            sorted_sub_tasks[j]->parent_num,
-                            sorted_sub_tasks[j]->num,
-                            sorted_sub_tasks[j]->loop_iteration_count,
-                            sorted_sub_tasks[j]->cumulative_execution_time,
-                            sorted_sub_tasks[j]->execution_time,
-                            sorted_sub_tasks[j]->relative_deadline,
-                            sorted_sub_tasks[j]->utilization,
-                            sorted_sub_tasks[j]->core);
-    }
 
-    /* ### Assigning cores and priority ### */
+    // ### Assigning cores ### 
     // Iterating through the sorted sub-tasks
     for(i = 0; i < TOTAL_SUBTASKS; ++i){
 
@@ -222,49 +474,52 @@ static int assign_cores_and_priority(void){
 
         // Iterating through cores
         for(j = 0; (j < NUM_CORES) && (!successful_assignment); ++j){
+
             int new_util = 
                 core_utilization[j] + sorted_sub_tasks[i]->utilization;
             
             // Checking whether the task will fit in the core
             bool will_fit = (new_util <= MAX_UTILIZATION);
 
+            #if DEBUG
+               printk(KERN_INFO "Core %d has %d utilization\n", 
+                    j,
+                    core_utilization[j]);
+            #endif
+            
+            // Assigning the core once it fits
             if(will_fit){
-                // Assigning the core once it fits
                 sorted_sub_tasks[i]->core = j;   // Assigning core
 
-                // Assigning sub-task priority
-                if(core_subtask_priority[i] <= 0){                       
-                    sorted_sub_tasks[i]->priority = 0;
-                }else{                        
-                    sorted_sub_tasks[i]->priority =
-                                     core_subtask_priority[i]--;
-                }
-
                 core_utilization[j] = new_util;  // Tracking core util
-                successful_assignment = true;
-                last_assigned_core = j;
+                ++core_num_subtasks[j];          // Tracking subtasks per-core
+                last_assigned_core = j;         
+
+                successful_assignment = true;   
             }
+
+            #if DEBUG
+               printk(KERN_INFO "Core %d has %d utilization\n", 
+                    j,
+                    core_utilization[j]);
+            #endif
 
         }
 
         // If proper assignment was not possible
         if(!successful_assignment){ 
-            sorted_sub_tasks[i]->core = ++last_assigned_core;
+            if(++last_assigned_core >= NUM_CORES)
+                last_assigned_core = 0;
 
-            // Assigning sub-task priority
-            if(core_subtask_priority[i] <= 0){                       
-                sorted_sub_tasks[i]->priority = 0;
-            }else{                        
-                sorted_sub_tasks[i]->priority =
-                                    core_subtask_priority[i]--;
-            }
-
-            return_value = -1;
+            ++core_num_subtasks[last_assigned_core];    // Assigning last core
+            sorted_sub_tasks[i]->core = last_assigned_core;
+            return_value = -FAILED_TO_SCHEDULE_SUBTASKS;
         }
 
         #if DEBUG
-            printk(KERN_INFO "Core %d has %d utilization\n", 
-                    j, core_utilization[j]);
+            printk(KERN_INFO "Last Assigned core %d has %d utilization\n", 
+                    last_assigned_core,
+                    core_utilization[last_assigned_core]);
         #endif
 
 
@@ -276,10 +531,134 @@ static int assign_cores_and_priority(void){
 
 /* Function to assign priorites to all subtasks */
 
-static void 
+static int 
 set_priority(void){
+    
+    // Iterators
+    int i, j, k;
+
+    // Allocating memory to keep track of which subtask is assigned to which
+    // core and sorting the array
+    for(i = 0; i < NUM_CORES; ++i){
+
+        int cur_priority = MIN_PRIORITY; // Initializing priority insertion val
 
 
+        #if DEBUG
+            printk(KERN_INFO"Allocating memory for core %d\n", i) ;
+        #endif 
+
+        // If there are no sub-tasks in the core, move to the next core
+        if(core_num_subtasks[i] == 0) {
+            continue;
+        }
+
+        core_sub_tasks[i] = kmalloc(
+                            sizeof(struct sub_task *) * core_num_subtasks[i],
+                            GFP_KERNEL);
+
+        
+        
+        #if DEBUG
+            printk(KERN_INFO"Checking allocation for core %d\n", i) ;
+            printk(KERN_INFO"Allocation value is %p\n", core_sub_tasks[i]) ;
+        #endif 
+
+
+        // If kmalloc fails, free all memory
+        if(!core_sub_tasks[i]){ 
+            #if DEBUG
+                printk(KERN_INFO"Failed allocation %d\n", i) ;
+            #endif 
+
+
+            for(j = 0; j <= i; ++j){                    
+                kfree(core_sub_tasks[j]);
+                core_sub_tasks[j] = 0;
+            }
+            deallocate_memory();
+            return -INSUFFICIENT_MEMORY;
+        }
+
+
+        #if DEBUG
+            printk(KERN_INFO"Populating for core %d\n", i) ;
+        #endif 
+
+
+        // Populating populating core_sub_task
+        for(j = 0, k = 0; k < TOTAL_SUBTASKS; ++k){                    
+            if(sorted_sub_tasks[k]->core == i){
+            #if DEBUG
+                printk(KERN_INFO"Inserting task %d\n into slot %d", k,j);
+            #endif 
+
+                if(j > core_num_subtasks[i]){
+                    printk(KERN_INFO"Invalid Core Task Indesx %d", j);
+                }
+
+                (core_sub_tasks[i])[j]  = sorted_sub_tasks[k]; // Setting the pointer 
+                ++j;
+            }
+        }
+
+        #if DEBUG
+            printk(KERN_INFO"Population complete for core %d\n", i) ;
+        #endif 
+
+        #if DEBUG 
+        // Pringing all subtask core and relative_deadlines
+        for(k = 0; k < core_num_subtasks[i]; ++k){                    
+            printk(KERN_INFO"Core: %d Relative deadline: %lu\n", 
+                   (core_sub_tasks[i])[k]->core,
+                   (core_sub_tasks[i])[k]->relative_deadline);
+
+
+        }
+
+        #endif
+
+
+
+        // Sorting core_sub_tasks in ascending order by relative deadline
+        sort(core_sub_tasks[i],
+             core_num_subtasks[i],
+             sizeof(struct sub_task *),
+             &compare_by_relative_deadline, NULL);
+
+         #if DEBUG
+            printk(KERN_INFO "Sorting complete for core %d\n", i) ;
+        #endif 
+
+       
+
+        #if DEBUG 
+        // Pringing all subtask core and relative_deadlines
+        for(k = 0; k < core_num_subtasks[i]; ++k){                    
+
+            printk(KERN_INFO"Core: %d Relative deadline: %lu\n", 
+                   (core_sub_tasks[i])[k]->core,
+                   (core_sub_tasks[i])[k]->relative_deadline);
+
+            print_sub_tasks(core_sub_tasks[i][k]);
+        }
+        #endif
+
+        // Assigning priorities
+        for(k = 0; k < core_num_subtasks[i]; ++k){
+            core_sub_tasks[i][k]->priority = cur_priority++;
+            if(cur_priority > MAX_PRIORITY) {
+                cur_priority = MAX_PRIORITY;
+            }
+        }
+
+
+
+    } 
+
+
+    return 0;
+    
 }
 
 
@@ -294,15 +673,15 @@ init_tasks(void){
 
     int i, j;
 
-    /* Looping through each task*/
+    // Looping through each task
     for(i = 0; i < NUM_TASKS; ++i){
         
-        /* Pointer to array for each ete subtask */
+        // Pointer to array for each ete subtask 
         struct sub_task * ete_sub_tasks;  
 
         ulong cumulative_execution_time, relative_deadline, utilization;
 
-        const int cur_num_sub_tasks = ete_tasks[i].subtasks_num;
+        const int CUR_NUM_SUB_TASKS = ete_tasks[i].subtasks_num;
 
         cumulative_execution_time = 0;
     
@@ -313,31 +692,30 @@ init_tasks(void){
                 ete_tasks[i].period_ms,
                 ete_tasks[i].execution_time);
 
-        ete_sub_tasks = sub_tasks[i];
+        // Storing the array of subtasks for current tasks
+        ete_sub_tasks = sub_tasks[i]; 
 
-         
-
-        /* Looping through sub-tasks */
-        for(j = 0; j <  cur_num_sub_tasks; ++j){
+        // Looping through sub-tasks 
+        for(j = 0; j <  CUR_NUM_SUB_TASKS; ++j){
 
             relative_deadline = 0;
             utilization = 0;
 
-            /* Calculating cumulative execution time. */
+            // Calculating cumulative execution time. 
             cumulative_execution_time +=
                  ete_sub_tasks[j].execution_time;
 
-            /* Calculating relative deadline rounded down to the nearest whole 
-            *  whole number. This is the safer as earlier deadlines have a 
-            *  higher priority. 
-            */
+            // Calculating relative deadline rounded down to the nearest whole 
+            // whole number. This is the safer as earlier deadlines have a 
+            // higher priority. 
+            
             relative_deadline = (ete_tasks[i].period_ms *
                  cumulative_execution_time) / ete_tasks[i].execution_time;
             
-            /* Calculating utilization in a scale of 1 to 100 rounded up to
-            * the nearest whole number, as this will make it safer. There will
-            * be no utilization = 0 and a cores will not be over-filled.
-            */
+            // Calculating utilization in a scale of 1 to 100 rounded up to
+            // the nearest whole number, as this will make it safer. There will
+            // be no utilization = 0 and a cores will not be over-filled.
+            //
             utilization = 
             (ete_sub_tasks[j].execution_time * MAX_UTILIZATION)/ ete_tasks[i].period_ms;
             
@@ -346,8 +724,7 @@ init_tasks(void){
                 (!!( ete_tasks[i].period_ms % ete_sub_tasks[j].execution_time));
 
 
-            /* Setting the varialbes in the sub-tasks */
-            
+            // Setting the varialbes in the sub-tasks 
             ete_sub_tasks[j].cumulative_execution_time = 
                 cumulative_execution_time;
             
@@ -368,36 +745,100 @@ ete_init(void)
 {
 
 
+
     printk(KERN_INFO "Loaded kernel_memory module with argument %s\n", 
             exec_mode);
 
+    
     init_tasks();
     printk(KERN_INFO "Tasks Value Initializiation Complete!\n");
+
+    
+    
     printk(KERN_INFO "Starting Core Assignment \n");
     if(assign_cores() != 0){
         printk(KERN_ALERT "This set of tasks is not schedulable.\n             \
                            Cores have been asigned anyway.\n");
     }
-
     printk(KERN_INFO "Assigning Cores Complete!\n");
 
-    print_all_tasks_and_subtasks();
+    
+    printk(KERN_INFO "Setting priority for each sub-task\n");
+    if(set_priority() != 0){
+        printk(KERN_ALERT "Insufficient Memory. Stopping!\n");
+        return INSUFFICIENT_MEMORY;
+    }
+    printk(KERN_INFO "Setting priority complete\n");
+
+    // If inside calibration mode
+    if(strcmp(exec_mode, CALIBRATE) == 0){
+        unsigned int i;
+
+        ktime_t thread_wakeup_delay = ktime_set(0,
+                                             CALIBRATION_THREAD_START_DELAY_NS);
+        hrtimer_init(&thread_wakeup_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+        
+        thread_wakeup_timer.function = &wake_up_all_core_threads;
+
+
+        // Creating calibration thread for each core
+        for(i = 0; i < NUM_CORES; ++i){
+            struct sched_param sp_calibration_thread;
+            char * thread_name = "calibration_thread";
+
+            printk("Creating thread %s for core %d", thread_name, i);
+
+            core_threads[i] = kthread_create(calibrate_thread_function,
+                                             core_sub_tasks[i],
+                                             thread_name);
+
+            
+            sp_calibration_thread.sched_priority = 0;
+
+            if(IS_ERR(core_threads[i])){
+                printk(KERN_ALERT "Calibration thread creation failed.\n \
+                                   Stopping calibration.");
+                deallocate_memory(); 
+                return -FAILED_TO_CREATE_THREAD;
+            }
+
+            kthread_bind(core_threads[i], i);
+
+            if(!(sched_setscheduler(core_threads[i],
+                                SCHED_FIFO,
+                                &sp_calibration_thread)))
+            {
+                printk(KERN_ALERT "Failed to schedule calibration thread\n");
+                deallocate_memory();
+                return -FAILED_TO_SET_SCHEDULER;
+            }
+
+            wake_up_process(core_threads[i]);
+        }
+
+
+
+        // Timer to wake up threads after thread_wakeup_delay
+        hrtimer_start(&thread_wakeup_timer,
+                      thread_wakeup_delay,
+                      HRTIMER_MODE_REL);
+
+
+    }
+
 
     
-
-
-
-
     return 0;
-
-
 
 }
 
 static void 
 ete_exit(void)
 {
+    // Iterators
     printk(KERN_INFO "Unloaded kernel_memory module\n");
+    deallocate_memory();
+
 }
 
 module_init(ete_init);
