@@ -22,7 +22,7 @@ struct ete_task ete_tasks[] = {
     {
         .task_num = 1,   
         .subtasks_num = 3,   
-        .period_ms = 20,  
+        .period_ms = 3000,  
         .execution_time = 6,   
 
    },
@@ -31,7 +31,7 @@ struct ete_task ete_tasks[] = {
     {
         .task_num = 2,   
         .subtasks_num = 3,   
-        .period_ms = 20,  
+        .period_ms = 3000,  
         .execution_time = 6,   
    },
 
@@ -39,7 +39,7 @@ struct ete_task ete_tasks[] = {
     {
         .task_num = 3, 
         .subtasks_num = 3,   
-        .period_ms = 20,  
+        .period_ms = 3000,  
         .execution_time = 12,   
 
    }
@@ -60,7 +60,7 @@ struct sub_task sub_tasks_1[] = {
        .task = 0,
 
        .last_release_time = 0,
-       .loop_iteration_count = 0,       // To be calibrated 
+       .loop_iteration_count = 9579,       // To be calibrated 
        .cumulative_execution_time = 0,  // Calculated before running 
        .execution_time = 1,
        .relative_deadline = 0,          // Calculated before running
@@ -77,7 +77,7 @@ struct sub_task sub_tasks_1[] = {
        .task = 0,
 
        .last_release_time = 0,
-       .loop_iteration_count = 0,       // To be calibrated 
+       .loop_iteration_count = 19312,       // To be calibrated 
        .cumulative_execution_time = 0,  // Calculated before running
        .execution_time = 2,
        .relative_deadline = 0,          // Calculated before running
@@ -94,7 +94,7 @@ struct sub_task sub_tasks_1[] = {
        .task = 0,
 
        .last_release_time = 0,
-       .loop_iteration_count = 0,       // To be calibrated 
+       .loop_iteration_count = 29062,       // To be calibrated 
        .cumulative_execution_time = 0,  // Calculated before running
        .execution_time = 3,
        .relative_deadline = 0,          // Calculated before running
@@ -122,7 +122,7 @@ struct sub_task sub_tasks_2[] = {
        .task = 0,
 
        .last_release_time = 0,
-       .loop_iteration_count = 0,       // To be calibrated 
+       .loop_iteration_count = 9750,       // To be calibrated 
        .cumulative_execution_time = 0,  // Calculated before running 
        .execution_time = 1,
        .relative_deadline = 0,          // Calculated before running
@@ -139,7 +139,7 @@ struct sub_task sub_tasks_2[] = {
        .task = 0,
 
        .last_release_time = 0,
-       .loop_iteration_count = 0,       // To be calibrated 
+       .loop_iteration_count = 19247,       // To be calibrated 
        .cumulative_execution_time = 0,  // Calculated before running
        .execution_time = 2,
        .relative_deadline = 0,          // Calculated before running
@@ -156,7 +156,7 @@ struct sub_task sub_tasks_2[] = {
        .task = 0,
 
        .last_release_time = 0,
-       .loop_iteration_count = 0,       // To be calibrated 
+       .loop_iteration_count = 29083,       // To be calibrated 
        .cumulative_execution_time = 0,  // Calculated before running
        .execution_time = 3,
        .relative_deadline = 0,          // Calculated before running
@@ -179,7 +179,7 @@ struct sub_task sub_tasks_3[] = {
        .task = 0,
 
        .last_release_time = 0,
-       .loop_iteration_count = 0,       // To be calibrated 
+       .loop_iteration_count = 19312,       // To be calibrated 
        .cumulative_execution_time = 0,  // Calculated before running 
        .execution_time = 2,
        .relative_deadline = 0,          // Calculated before running
@@ -196,8 +196,8 @@ struct sub_task sub_tasks_3[] = {
        .task = 0,
 
        .last_release_time = 0,
-       .loop_iteration_count = 0,       // To be calibrated 
-       .cumulative_execution_time = 0,  // Calculated before running
+       .loop_iteration_count = 38549,
+       .cumulative_execution_time = 0,
        .execution_time = 4,
        .relative_deadline = 0,          // Calculated before running
 
@@ -213,7 +213,7 @@ struct sub_task sub_tasks_3[] = {
        .task = 0,
 
        .last_release_time = 0,
-       .loop_iteration_count = 0,       // To be calibrated 
+       .loop_iteration_count = 58007,       // To be calibrated 
        .cumulative_execution_time = 0,  // Calculated before running
        .execution_time = 6,
        .relative_deadline = 0,          // Calculated before running

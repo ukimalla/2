@@ -29,7 +29,7 @@ struct sub_task
     
     ulong relative_deadline;         // Relative deadline of the task
 
-    int core;                        // Core that the task will bind to
+    unsigned int core;               // Core that the task will bind to
 
     ulong utilization;               // Utilization of the task
 
