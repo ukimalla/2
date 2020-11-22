@@ -23,12 +23,13 @@
 
 // Task Includes 
 #include "tasks.h"
-#include "t1.h"
+#include "t2.h"
 
 
 // TODO : Add compariosion return value
 
 #define NUM_CORES 4
+#define HIGHEST_CORE_NUM 3
 
 #define MAX_UTILIZATION 100
 #define MAX_PRIORITY 99 
@@ -39,19 +40,25 @@
 #define AFTER_EXEC_INDEX 1
 #define INIT_NUM_ITERATIONS 3000 
 #define CALIBRATION_THREAD_START_DELAY_NS 100000000
-#define MAX_CALIBRATION_ITERATIONS 50
+#define MAX_CALIBRATION_ITERATIONS 100 
 #define MS_TO_US_CONVERSION_FACTOR 1000 
+#define MS_TO_NS_CONVERSION_FACTOR 1000000
 #define ERROR_TOLERANCE 10 // 0.01 miliseconds or 10 microseconds
 #define SEARCH_FACTOR 2 // Binary search
 
+#define FIRST_TASK 1
+#define SUCCESSOR_TASK_OFFSET 1 
+#define PARENT_NUM_ARRAY_OFFSET 1
 
 #define CALIBRATE "calibrate"
+#define RUN "run"
 
 static char * exec_mode = CALIBRATE; 
 
 static struct hrtimer thread_wakeup_timer; 
 
-module_param(exec_mode, charp, 0644); 
+ module_param(exec_mode, charp, 0644); 
+
 
 // Array of sub_task pointers bound to each core
 static struct sub_task ** core_sub_tasks[NUM_CORES]; 
@@ -65,52 +72,6 @@ static struct task_struct * core_threads[NUM_CORES] = {NULL, NULL, NULL, NULL};
 
 // An array of pointers to all subtasks to be sorted by utilization.
 struct sub_task * sorted_sub_tasks[TOTAL_SUBTASKS]; 
-
-
-static void deallocate_memory(void){
-    int i;
-    // Deallocating dynamically allocated memory
-    for(i = 0; i < NUM_CORES; ++i){
-       if(core_sub_tasks[i]){
-           kfree(core_sub_tasks[i]); 
-       }
-       core_sub_tasks[i] = 0; // Removing free-ed pointer
-    }
-}
-
-
-
-
-/*
-
-static ktime_t timer_interval;
-struct hrtimer timer;
-
-
-static int tick;
-
-static enum hrtimer_restart 
- timer_function( struct hrtimer * timer ){
-     if(tick >= 4)
-        tick = 0;
-
-    wake_up_process(kthread2);
-
-    if(tick == 0 || tick == 2)
-        wake_up_process(kthread1);
-    
-    if(tick == 3) 
-        wake_up_process(kthread);
-
-    ++tick;
-
-    hrtimer_forward_now(timer, timer_interval);
-    return HRTIMER_RESTART;
-}
-
-
-
-*/
 
 
 // Prints all the member variables of the task
@@ -133,7 +94,9 @@ void print_sub_tasks(struct sub_task * st){
                             execution_time %lu \n \
                             relative_deadline %lu \n \
                             utilization %lu \n \
-                            core %d \n ",
+                            core %d \n \
+                            task %p \n \
+                            timer ptr %p \n",
                             st->parent_num,
                             st->num,
                             st->loop_iteration_count,
@@ -141,7 +104,9 @@ void print_sub_tasks(struct sub_task * st){
                             st->execution_time,
                             st->relative_deadline,
                             st->utilization,
-                            st->core);
+                            st->core,
+                            st->task,
+                            &(st->timer));
 }
 
 /* Function to print all tasks and subtasks */
@@ -173,16 +138,177 @@ void print_all_tasks_and_subtasks(void){
 
 
 
+static void deallocate_memory(void){
+    unsigned int i;
+    // Deallocating dynamically allocated memory
+    for(i = 0; i < NUM_CORES; ++i){
+       if(core_sub_tasks[i]){
+           kfree(core_sub_tasks[i]); 
+       }
+       core_sub_tasks[i] = 0; // Removing free-ed pointer
+    }
+}
+
+/* subtask_lookup
+* Function to obtain the sub_task struct using the subtask's timer.
+*/
+static struct sub_task * subtask_lookup(struct hrtimer * timer){
+
+    int hrtimer_offset = ((void *) &(sub_tasks[0]->timer) -
+                                        (void *) (sub_tasks[0]));
+
+    
+
+ // Iterator
+    #if DEBUG 
+        printk(KERN_INFO 
+               "Performing subtask_lookup for %p", timer);
+    #endif
+
+
+    return (struct sub_task * ) ((void *) timer - hrtimer_offset);
+}
+
+/* timer_expiration_function
+*  Function to wakeup the process when the timer expires
+*/
+static enum hrtimer_restart 
+timer_expiration_function(struct hrtimer * timer){
+    struct sub_task * st;
+    
+    st = subtask_lookup(timer);
+    wake_up_process(st->task);
+
+    #if DEBUG
+        printk(KERN_ALERT"Should've woken up task \n");
+    #endif
+ 
+
+    return HRTIMER_NORESTART;
+}
+
+
 /* subtask_function
    Calls ktime_get as specified by loop_iteration_count in st to simulate 
    real workload.
  */ 
 void subtask_function( struct sub_task * st ){
-    // Iterator
     int i;
+
+    // Iterator
+    #if DEBUG 
+        printk(KERN_INFO 
+               "Running task %d and subtask %d\n", st->parent_num, st->num);
+    #endif
+
+
     for(i = 0; i < st->loop_iteration_count; ++i){
         ktime_get();
     }
+}
+
+
+
+/* run_thread_function
+*  
+*/
+static int run_thread_function(void * data){
+    struct sub_task * st = (struct sub_task *) data;
+
+    if(st){
+        struct ete_task * pt;
+        struct sub_task * succ_st;
+        ulong period_ns;
+        ktime_t period;
+
+        hrtimer_init(&(st->timer), CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+        st->timer.function = &timer_expiration_function;
+
+        
+        while(!kthread_should_stop()){
+            set_current_state(TASK_INTERRUPTIBLE);
+            schedule();
+
+        #if DEBUG
+            printk(KERN_ALERT"Hello after wake up for subtask");
+            print_sub_tasks(st);
+        #endif
+ 
+
+            pt = &(ete_tasks[st->parent_num - PARENT_NUM_ARRAY_OFFSET]);
+            period_ns = pt->period_ms *
+                            MS_TO_NS_CONVERSION_FACTOR;
+
+            period = ktime_set(0, period_ns);
+
+            #if DEBUG
+                printk(KERN_ALERT"The period_ns is %lld\n", ktime_to_ns(period_ns));
+            #endif 
+
+
+            st->last_release_time = ktime_get();
+            subtask_function(st);
+            if(st->num == FIRST_TASK){ 
+                if(!hrtimer_active(&(st->timer))){
+                    ktime_t exp_time = period - (ktime_get() - st->last_release_time);
+                   
+
+                    #if DEBUG
+                        printk(KERN_ALERT"The time is inactive \n");
+                    #endif
+                   printk(KERN_ALERT"The timer will fire in %lld\n",
+                            ktime_to_ns(exp_time));
+
+                    hrtimer_start(&(st->timer), 
+                              exp_time, 
+                              HRTIMER_MODE_REL);  
+
+
+                }else{
+                    #if DEBUG
+                        printk(KERN_ALERT"The timer is in active\n");
+                        print_sub_tasks(st);
+                    #endif
+
+                    /*hrtimer_forward(&(st->timer), st->last_release_time, period);*/
+                }
+
+                
+            }else{
+
+                     #if DEBUG
+                        printk(KERN_ALERT"Not the first task");
+                    #endif
+            }
+                        
+            if(st->num != pt->subtasks_num){ // Checking for not last task 
+                ktime_t next_release_time;
+                
+                /*succ_st = &(sub_tasks[st->parent_num - PARENT_NUM_ARRAY_OFFSET]
+                                   [st->num]);*/
+
+
+
+                 /*next_release_time = ktime_add(period,
+                                                succ_st->last_release_time);*/
+
+                if(ktime_get() < next_release_time){
+                   /*hrtimer_start(&(succ_st->timer),
+                                 next_release_time,
+                                 HRTIMER_MODE_ABS);*/
+
+                }else{
+                    //wake_up_process(succ_st->task);
+                }
+            }
+
+            
+        }
+
+        
+    }
+    return 0;
+
 }
 
 
@@ -311,7 +437,7 @@ static int calibrate_thread_function(void * data){
                                         core_subtask_array[i]->loop_iteration_count);
                     #endif
                 }
-                
+               
                 
                 else if(error < 0) // Took shorter than necessary 
                 {
@@ -377,11 +503,12 @@ static int calibrate_thread_function(void * data){
 // Function to wake up all calibration core threads
 static enum hrtimer_restart
 wake_up_all_core_threads( struct hrtimer * timer ){
-    int core_num;
+    unsigned int core_num;
 
     for(core_num = 0; core_num < NUM_CORES; ++core_num){
-        if(core_threads[core_num]){
-            printk(KERN_INFO"Should call wakeup process\n");
+        if(core_num_subtasks[core_num]){
+            printk(KERN_INFO"Should call wakeup process for thread %d\n",
+                   core_num);
             wake_up_process(core_threads[core_num]);
         }
     }
@@ -427,7 +554,8 @@ static int compare_by_relative_deadline(const void *lhs, const void *rhs){
 static int assign_cores(void){
   
     // Iterators 
-    int i, j;
+    int i;
+    unsigned j;
 
     int return_value = 0;
     int core_utilization[NUM_CORES] = {0, 0, 0, 0};
@@ -473,7 +601,7 @@ static int assign_cores(void){
         int last_assigned_core = 0;
 
         // Iterating through cores
-        for(j = 0; (j < NUM_CORES) && (!successful_assignment); ++j){
+        for(j = HIGHEST_CORE_NUM; (j >= 0) && (!successful_assignment); --j){
 
             int new_util = 
                 core_utilization[j] + sorted_sub_tasks[i]->utilization;
@@ -535,7 +663,8 @@ static int
 set_priority(void){
     
     // Iterators
-    int i, j, k;
+    int j, k;
+    unsigned int i;
 
     // Allocating memory to keep track of which subtask is assigned to which
     // core and sorting the array
@@ -771,7 +900,7 @@ ete_init(void)
     printk(KERN_INFO "Setting priority complete\n");
 
     // If inside calibration mode
-    if(strcmp(exec_mode, CALIBRATE) == 0){
+    if(!(strcmp(exec_mode, CALIBRATE) == 0)){
         unsigned int i;
 
         ktime_t thread_wakeup_delay = ktime_set(0,
@@ -806,7 +935,7 @@ ete_init(void)
 
             if(!(sched_setscheduler(core_threads[i],
                                 SCHED_FIFO,
-                                &sp_calibration_thread)))
+                                &sp_calibration_thread)) != 0)
             {
                 printk(KERN_ALERT "Failed to schedule calibration thread\n");
                 deallocate_memory();
@@ -824,7 +953,111 @@ ete_init(void)
                       HRTIMER_MODE_REL);
 
 
+    }else{
+    //else if(strcmp(exec_mode, RUN)){
+        // Instantiating thread by core
+        unsigned int core_num, task_num, thread_num;
+        // Iterating through subtasks assigned to each core
+        for(core_num = 0, thread_num = 0; core_num < NUM_CORES; ++core_num){
+            int sub_task_num;
+            for(sub_task_num = 0; 
+                sub_task_num < core_num_subtasks[core_num];
+                ++sub_task_num)
+            {
+                struct sched_param sp;
+                struct sub_task * cur_sub_task = 
+                                core_sub_tasks[core_num][sub_task_num];
+
+
+                #if DEBUG
+                    printk("Creating thread for task: \n");
+                    print_sub_tasks(cur_sub_task);
+                #endif
+
+
+                        
+                cur_sub_task->task = kthread_create(run_thread_function,
+                                       cur_sub_task,
+                                       "thread_%d",thread_num++);
+
+                #if DEBUG
+                    printk("Created thread %p\n", cur_sub_task->task);
+                #endif
+
+                
+                if(IS_ERR(cur_sub_task->task)){
+                    printk(KERN_ALERT "Failed to create a thread for the \
+                                        following subtask:\n");
+
+                    print_sub_tasks(cur_sub_task);
+                    printk(KERN_ALERT "Stopping all execution\n");
+                    deallocate_memory();
+                    return -FAILED_TO_CREATE_THREAD; 
+                }
+
+                kthread_bind(cur_sub_task->task, core_num);
+
+                sp.sched_priority = cur_sub_task->priority;
+                
+                // Setting scheduler
+                if(sched_setscheduler(cur_sub_task->task,
+                                        SCHED_FIFO,
+                                        &sp) == -1)
+                {
+                    printk(KERN_ALERT"Failed to schedule the following subtask \
+                    \n");
+                    print_sub_tasks(cur_sub_task);
+                    printk(KERN_ALERT "Stopping all execution\n");
+                    deallocate_memory();
+                    return -FAILED_TO_SET_SCHEDULER;
+                }
+
+                #if DEBUG
+                    printk("Waking up process");
+                    print_sub_tasks(cur_sub_task);
+                #endif
+
+
+
+                wake_up_process(cur_sub_task->task);
+
+
+
+                #if DEBUG
+                    printk("Thread creation complete\n");
+                #endif
+
+            }
+
+
+
+        }
+
+        #if DEBUG
+            printk("Waking up first subtask in each task \n");
+        #endif
+
+
+
+        // Waking up each first task in all tasks
+        for(task_num = 0; task_num < NUM_TASKS; ++task_num){
+            print_sub_tasks(&(sub_tasks[task_num][0]));
+            wake_up_process((sub_tasks[task_num][0].task));
+        }
+
+        #if DEBUG
+            printk("Waking procedures complete!\n");
+        #endif
+
+
+ 
+        
     }
+    
+    /*else{
+        printk(KERN_ALERT "Invalid module initialization parameter exec_mode=\
+         %s. No calibration or run threads were created.\n", exec_mode);
+    }*/
 
 
     
@@ -833,10 +1066,34 @@ ete_init(void)
 }
 
 static void 
+stop_threads_and_timers( void ){
+    int task_num, sub_task_num;
+    for(task_num = 0; task_num < NUM_TASKS; ++task_num){
+        for(sub_task_num = 0; sub_task_num < TOTAL_SUBTASKS; 
+            ++sub_task_num)
+        {
+            if(sub_tasks[task_num][sub_task_num].task){
+                kthread_stop(sub_tasks[task_num][sub_task_num].task);
+                hrtimer_cancel(&(sub_tasks[task_num][sub_task_num].timer));
+            }
+            
+        }
+
+    }
+
+}
+
+
+
+static void 
 ete_exit(void)
 {
     // Iterators
     printk(KERN_INFO "Unloaded kernel_memory module\n");
+    stop_threads_and_timers();
+
+
+
     deallocate_memory();
 
 }
