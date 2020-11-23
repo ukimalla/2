@@ -22,7 +22,7 @@ struct ete_task ete_tasks[] = {
     {
         .task_num = 1,   
         .subtasks_num = 3,   
-        .period_ms = 3000,  
+        .period_ms = 30,  
         .execution_time = 6,   
 
    },
@@ -31,7 +31,7 @@ struct ete_task ete_tasks[] = {
     {
         .task_num = 2,   
         .subtasks_num = 3,   
-        .period_ms = 3000,  
+        .period_ms = 30,  
         .execution_time = 6,   
    },
 
@@ -39,12 +39,10 @@ struct ete_task ete_tasks[] = {
     {
         .task_num = 3, 
         .subtasks_num = 3,   
-        .period_ms = 3000,  
+        .period_ms = 30,  
         .execution_time = 12,   
 
    }
-
-
 
 };
 

@@ -22,11 +22,10 @@ struct ete_task ete_tasks[] = {
     {
         .task_num = 1,   
         .subtasks_num = 3,   
-        .period_ms = 3000,  
+        .period_ms = 9,  
         .execution_time = 6,   
 
-   },
-
+   }
 
 };
 
@@ -73,7 +72,7 @@ struct sub_task sub_tasks_1[] = {
        .task = 0,
 
        .last_release_time = 0,
-       .loop_iteration_count = 23066,       // To be calibrated 
+       .loop_iteration_count = 22885,       // To be calibrated 
        .cumulative_execution_time = 0,  // Calculated before running
        .execution_time = 3,
        .relative_deadline = 0,          // Calculated before running
